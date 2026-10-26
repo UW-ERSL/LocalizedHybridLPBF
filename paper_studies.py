@@ -86,37 +86,12 @@ class TemporalTruncationStudyConfiguration:
     output_directory: Path
 
 
-@dataclass(frozen=True)
-class RefinementCase:
-    """One saved localized run in a coarse-to-fine refinement sequence."""
-
-    label: str
-    folder: Path
-
-
-@dataclass(frozen=True)
-class RefinementStudyConfiguration:
-    """Localized-only time-step and mesh-refinement study."""
-
-    study_name: str
-    line_count: int
-    time_cases: tuple[RefinementCase, ...]
-    mesh_cases: tuple[RefinementCase, ...]
-    output_directory: Path
-    sample_count: int = 2000
-    random_seed: int = 1729
-    # Optional interior points in metres. They are plotted separately and are
-    # not included in the random volume-sampled aggregate difference.
-    probe_points: tuple[tuple[float, float, float], ...] = ()
-
-
 StudyConfiguration = (
     LineCountStudyConfiguration
     | LocalizationExtentStudyConfiguration
     | PostScanTemporalStudyConfiguration
     | DetailedCaseStudyConfiguration
     | TemporalTruncationStudyConfiguration
-    | RefinementStudyConfiguration
     | AbaqusConvergenceStudyConfiguration
     | AbaqusHybridStudyConfiguration
 )
@@ -322,75 +297,6 @@ DETAILED_500_LINE_STUDY = DetailedCaseStudyConfiguration(
 
 
 # ---------------------------------------------------------------------------
-# LOCALIZED-ONLY REFINEMENT STUDY
-#
-# Enter saved result folders from COARSE TO FINE. The final case in each
-# sequence is used only as the finest numerical comparison reference; it is
-# not treated as an exact solution. The finest time-step case is reused in both
-# sequences. Every folder must come from a 100-line LOCALIZED run.
-# ---------------------------------------------------------------------------
-REFINEMENT_STUDY = RefinementStudyConfiguration(
-    study_name="fin_100_localized_refinement",
-    line_count=100,
-
-    time_cases=(
-        RefinementCase(
-            label="dt_0p5ms",
-            folder=(
-                RESULTS_DIRECTORY
-                / "REPLACE_WITH_Fin_100line_mesh_200_1000um_dt_0p5ms_folder"
-            ),
-        ),
-        RefinementCase(
-            label="dt_0p25ms",
-            folder=(
-                RESULTS_DIRECTORY
-                / "REPLACE_WITH_Fin_100line_mesh_200_1000um_dt_0p25ms_folder"
-            ),
-        ),
-        RefinementCase(
-            label="dt_0p125ms",
-            folder=(
-                RESULTS_DIRECTORY
-                / "REPLACE_WITH_Fin_100line_mesh_200_1000um_dt_0p125ms_folder"
-            ),
-        ),
-    ),
-
-    mesh_cases=(
-        RefinementCase(
-            label="mesh_200_1000um",
-            folder=(
-                RESULTS_DIRECTORY
-                / "REPLACE_WITH_Fin_100line_mesh_200_1000um_dt_0p125ms_folder"
-            ),
-        ),
-        RefinementCase(
-            label="mesh_150_750um",
-            folder=(
-                RESULTS_DIRECTORY
-                / "REPLACE_WITH_Fin_100line_mesh_150_750um_dt_0p125ms_folder"
-            ),
-        ),
-        RefinementCase(
-            label="mesh_100_500um",
-            folder=(
-                RESULTS_DIRECTORY
-                / "REPLACE_WITH_Fin_100line_mesh_100_500um_dt_0p125ms_folder"
-            ),
-        ),
-    ),
-
-    output_directory=(
-        RESULTS_DIRECTORY / "paper_fin_100_localized_refinement"
-    ),
-    sample_count=2000,
-    random_seed=1729,
-    probe_points=(),
-)
-
-
-# ---------------------------------------------------------------------------
 # ABAQUS STUDIES
 # Replace the parent path and case paths below with your own reference data:
 # an ODB file, a folder with exactly one ODB, or a completed export folder.
@@ -530,7 +436,6 @@ STUDY_LIBRARY: dict[str, StudyConfiguration] = {
     "fin_line_count_scaling": LINE_COUNT_STUDY,
     "fin_100_post_scan_temporal": POST_SCAN_TEMPORAL_STUDY,
     "fin_500_detailed_case": DETAILED_500_LINE_STUDY,
-    "fin_100_localized_refinement": REFINEMENT_STUDY,
     "abaqus_one_line_convergence": ABAQUS_CONVERGENCE_STUDY,
     "abaqus_one_line_hybrid_comparison": ABAQUS_HYBRID_STUDY,
 }
@@ -2020,282 +1925,6 @@ def run_detailed_case_study(
     return output
 
 
-class _RefinementTetMesh:
-    """Locate in the supplied connectivity, never in a convex-hull remesh."""
-    def __init__(self, nodes: np.ndarray, elements: np.ndarray):
-        from scipy.spatial import cKDTree
-        self.nodes = np.asarray(nodes, dtype=float)
-        self.elements = np.asarray(elements)
-        if (self.nodes.ndim != 2 or self.nodes.shape[1] != 3
-                or not np.all(np.isfinite(self.nodes))):
-            raise ValueError('invalid mesh node coordinates')
-        if (self.elements.ndim != 2 or self.elements.shape[1] != 4
-                or not np.issubdtype(self.elements.dtype, np.integer)
-                or not self.elements.size or self.elements.min() < 0
-                or self.elements.max() >= len(self.nodes)):
-            raise ValueError('invalid Tet4 connectivity')
-        xyz = self.nodes[self.elements]
-        self.origin = xyz[:, 0]
-        matrices = np.transpose(xyz[:, 1:] - xyz[:, :1], (0, 2, 1))
-        determinants = np.linalg.det(matrices)
-        if np.any(~np.isfinite(determinants)) or np.any(determinants == 0):
-            raise ValueError('degenerate tetrahedra')
-        self.volumes = np.abs(determinants) / 6
-        self.inverse = np.linalg.inv(matrices)
-        self.centers = xyz.mean(axis=1)
-        self.radius = np.max(np.linalg.norm(xyz - self.centers[:, None], axis=2))
-        self.tree = cKDTree(self.centers)
-        self.lower, self.upper = xyz.min(axis=1), xyz.max(axis=1)
-        self.length_tol = max(float(np.ptp(self.nodes, axis=0).max()) * 1e-10, 1e-14)
-
-    def sample(self, count: int, seed: int) -> np.ndarray:
-        rng = np.random.default_rng(seed)
-        ids = rng.choice(len(self.elements), count, p=self.volumes/self.volumes.sum())
-        weights = rng.dirichlet(np.ones(4), size=count)
-        return np.einsum('pi,pij->pj', weights, self.nodes[self.elements[ids]])
-
-    def locate(self, points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        ids = np.full(len(points), -1, dtype=int)
-        weights = np.zeros((len(points), 4))
-        # Any containing tet has its centroid within its maximum vertex radius.
-        candidates = self.tree.query_ball_point(points, self.radius + self.length_tol)
-        for i, candidates_i in enumerate(candidates):
-            c = np.asarray(candidates_i, dtype=int)
-            c = c[np.all(points[i] >= self.lower[c]-self.length_tol, axis=1)
-                  & np.all(points[i] <= self.upper[c]+self.length_tol, axis=1)]
-            if not len(c):
-                continue
-            b = np.einsum('kij,kj->ki', self.inverse[c], points[i]-self.origin[c])
-            w = np.column_stack((1-b.sum(axis=1), b))
-            inside = np.flatnonzero(np.all(w >= -1e-9, axis=1)
-                                    & np.all(w <= 1+1e-9, axis=1))
-            if len(inside):
-                j = inside[np.argmax(w[inside].min(axis=1))]
-                ids[i], weights[i] = c[j], w[j]
-        if np.any(ids < 0):
-            raise ValueError(f'{np.count_nonzero(ids < 0)} sample/probe points outside '
-                             'this mesh. Check geometry; no extrapolation is allowed.')
-        return self.elements[ids], weights
-
-
-def _refinement_load(case: RefinementCase) -> dict[str, Any]:
-    folder = Path(case.folder).expanduser().resolve()
-    manifest = _read_manifest(folder)
-    if manifest is None:
-        raise ValueError(f'missing run_manifest.json in {folder}')
-    summary = json.loads((folder/'localized_run_summary.json').read_text(encoding='utf-8'))
-    if summary.get('mode') != 'localized':
-        raise ValueError(f'expected localized mode: {folder}')
-    metadata = summary['metadata']
-    reference = validate_temperature_metadata(metadata)
-    with np.load(folder/'mesh_data.npz', allow_pickle=False) as data:
-        mesh = _RefinementTetMesh(data['node_coordinates'], data['element_connectivity'])
-    with np.load(folder/'localized_run_data.npz', allow_pickle=False) as data:
-        times = data['saved_times'].copy()
-        nodes = data['node_coordinates']
-        if not np.array_equal(nodes, mesh.nodes):
-            raise ValueError(f'mesh and saved field node ordering differ: {folder}')
-    if (len(times) < 3 or not np.all(np.isfinite(times))
-            or np.any(np.diff(times) <= 0)):
-        raise ValueError('need at least three strictly increasing saved times')
-    return dict(case=case, folder=folder, manifest=manifest, metadata=metadata,
-                mesh=mesh, times=times, dt=float(metadata['delta_time']),
-                initial_temperature_celsius=reference)
-
-
-def _refinement_signature(run: dict, kind: str) -> dict:
-    # Compare physical inputs and localization; permit only the intended
-    # resolution change and output cadence. Keep STL path in the signature.
-    exp = json.loads(json.dumps(run['manifest']['experiment']))
-    exp.pop('name', None)
-    exp.pop('paths', None)
-    exp['time'].pop('save_every', None)
-    if kind == 'time':
-        exp['time'].pop('delta_time', None)
-    else:
-        mesh = exp['mesh']
-        for key in ('element_size', 'element_size_function',
-                    'maximum_desired_elements', 'allow_large_mesh'):
-            mesh.pop(key, None)
-    return exp
-
-
-def _refinement_common_times(runs: list[dict]) -> tuple[np.ndarray, list[np.ndarray]]:
-    # Exact common saved instants up to roundoff. Never nearest-time substitute
-    # or temporal interpolation: either can mask time integration differences.
-    tol = max(1e-12, 1e-9*min(r['dt'] for r in runs))
-    starts = [r['times'][0] for r in runs]
-    ends = [r['times'][-1] for r in runs]
-    if np.ptp(starts) > tol or np.ptp(ends) > tol:
-        raise ValueError('all refinement runs must cover the same saved time interval')
-    common = runs[0]['times'].copy()
-    for run in runs[1:]:
-        t = run['times']
-        pos = np.searchsorted(t, common)
-        a, b = np.clip(pos, 0, len(t)-1), np.clip(pos-1, 0, len(t)-1)
-        idx = np.where(np.abs(t[a]-common) <= np.abs(t[b]-common), a, b)
-        common = common[np.abs(t[idx]-common) <= tol]
-    if len(common) < 3 or abs(common[0]-starts[0]) > tol or abs(common[-1]-ends[0]) > tol:
-        raise ValueError('insufficient common times including both endpoints; save more often')
-    indices = []
-    for run in runs:
-        t = run['times']
-        p = np.searchsorted(t, common)
-        a, b = np.clip(p, 0, len(t)-1), np.clip(p-1, 0, len(t)-1)
-        indices.append(np.where(np.abs(t[a]-common) <= np.abs(t[b]-common), a, b))
-    return common, indices
-
-
-def _refinement_metrics(a: np.ndarray, b: np.ndarray, times: np.ndarray) -> dict:
-    # Trapezoidal weights also support nonuniform common output schedules.
-    w = np.zeros(len(times))
-    w[:-1] += np.diff(times)/2
-    w[1:] += np.diff(times)/2
-    numerator = float(w @ np.mean((a-b)**2, axis=1))
-    denominator = float(w @ np.mean(b*b, axis=1))
-    return dict(relative_sampled_L2_percent=(100*np.sqrt(numerator/denominator)
-                if denominator > 0 else (0.0 if numerator == 0 else None)),
-                sampled_RMSE_C=float(np.sqrt(numerator/w.sum())),
-                sampled_max_abs_difference_C=float(np.max(np.abs(a-b))))
-
-
-def run_refinement_study(configuration: RefinementStudyConfiguration) -> Path:
-    """Compare Tet4-interpolated total temperatures in degrees Celsius.
-
-    The global metric is a uniform-volume Monte Carlo approximation of a
-    space-time relative L2 difference, time-integrated by the trapezoidal rule.
-    It is NOT exact-solution error. The spatial interpolant is the saved total
-    nodal field; it does not reevaluate the analytical near-source field.
-    Random interior probes can miss narrow peaks: supply physical probes and
-    check sample-count sensitivity before making global-accuracy claims.
-    """
-    if configuration.sample_count < 2:
-        raise ValueError('sample_count must be at least 2')
-    if configuration.line_count <= 0:
-        raise ValueError('line_count must be positive')
-    groups = {}
-    for kind, cases in [('time', configuration.time_cases), ('mesh', configuration.mesh_cases)]:
-        if not cases:
-            continue
-        if len(cases) < 3 or len({c.label for c in cases}) != len(cases):
-            raise ValueError('use at least three uniquely labelled coarse-to-fine runs')
-        runs = [_refinement_load(c) for c in cases]
-        for run in runs:
-            actual_line_count = int(run['manifest'].get('scan_line_count', -1))
-            if actual_line_count != configuration.line_count:
-                raise ValueError(
-                    f"expected {configuration.line_count} scan lines but found "
-                    f"{actual_line_count} in {run['folder']}"
-                )
-        if len({r['folder'] for r in runs}) != len(runs):
-            raise ValueError('duplicate run folders within a refinement sequence')
-        sig = _refinement_signature(runs[0], kind)
-        for r in runs[1:]:
-            if _refinement_signature(r, kind) != sig:
-                raise ValueError(f'{kind} study changes fixed settings: {r["folder"]}')
-            if r['metadata'].get('localization_parameters') != runs[0]['metadata'].get('localization_parameters'):
-                raise ValueError('localization parameters must remain fixed')
-        if kind == 'time':
-            if np.any(np.diff([r['dt'] for r in runs]) >= 0):
-                raise ValueError('time cases must have strictly decreasing delta_time')
-            for r in runs[1:]:
-                if (not np.array_equal(r['mesh'].nodes, runs[0]['mesh'].nodes)
-                        or not np.array_equal(r['mesh'].elements, runs[0]['mesh'].elements)):
-                    raise ValueError('time refinement requires the exact same mesh')
-        else:
-            if np.any(np.diff([len(r['mesh'].elements) for r in runs]) <= 0):
-                raise ValueError('mesh cases must have increasing element counts')
-        volumes = np.array([r['mesh'].volumes.sum() for r in runs])
-        if not np.allclose(volumes, volumes[0], rtol=1e-6, atol=0):
-            raise ValueError('mesh domain volumes differ; check geometry')
-        groups[kind] = runs
-    if not groups:
-        raise ValueError('fill time_cases and/or mesh_cases in REFINEMENT_STUDY')
-    if 'time' in groups and 'mesh' in groups:
-        signatures = []
-        for runs in groups.values():
-            signature = _refinement_signature(runs[0], 'mesh')
-            signature['time'].pop('delta_time', None)
-            signatures.append(signature)
-        if signatures[0] != signatures[1]:
-            raise ValueError('time and mesh sequences must use the same physical benchmark')
-    # One fixed point cloud, including across both sequences when supplied.
-    source = groups.get('mesh', groups.get('time'))[-1]['mesh']
-    random_points = source.sample(configuration.sample_count, configuration.random_seed)
-    probes = np.asarray(configuration.probe_points, dtype=float).reshape(-1, 3)
-    if not np.all(np.isfinite(probes)):
-        raise ValueError('probe coordinates must be finite')
-    points = np.concatenate((random_points, probes))
-    output = Path(configuration.output_directory)
-    output.mkdir(parents=True, exist_ok=True)
-    np.savetxt(output/'sample_points.csv', np.column_stack((np.arange(len(points)), points,
-               np.arange(len(points)) >= len(random_points))), delimiter=',',
-               header='point_id,x_m,y_m,z_m,is_prescribed_probe', comments='')
-    _write_json(output/'refinement_configuration.json', configuration)
-    report = {'metric': 'uniform-volume sampled space-time L2 difference, not ground-truth error',
-              'interpolation': 'Tet4 barycentric interpolation of physical Celsius temperature',
-              'initial_temperature_celsius': next(iter(groups.values()))[0]['initial_temperature_celsius'],
-              'seed': configuration.random_seed, 'sample_count': len(random_points), 'groups': {}}
-    plt = _get_pyplot()
-    for kind, runs in groups.items():
-        times, time_indices = _refinement_common_times(runs)
-        histories = []
-        for r, indices in zip(runs, time_indices):
-            vertices, weights = r['mesh'].locate(points)
-            with np.load(r['folder']/'localized_run_data.npz', allow_pickle=False) as data:
-                field = data['total_temperature']
-                if field.shape != (len(r['times']), len(r['mesh'].nodes)):
-                    raise ValueError('saved field shape mismatch')
-                history = np.empty((len(times), len(points)))
-                for start in range(0, len(times), 16):
-                    selected = field[indices[start:start+16]]
-                    history[start:start+16] = np.einsum('tpi,pi->tp', selected[:, vertices], weights)
-            if not np.all(np.isfinite(history)):
-                raise ValueError('nonfinite sampled temperatures')
-            histories.append(history)
-        rows = []
-        for i, (r, history) in enumerate(zip(runs, histories)):
-            row = dict(label=r['case'].label, folder=str(r['folder']),
-                       node_count=len(r['mesh'].nodes), element_count=len(r['mesh'].elements),
-                       delta_time_s=r['dt'], common_saved_times=len(times),
-                       reference_label=runs[-1]['case'].label, is_reference=i == len(runs)-1)
-            row.update(_refinement_metrics(history[:, :len(random_points)],
-                       histories[-1][:, :len(random_points)], times))
-            preceding = (_refinement_metrics(histories[i-1][:, :len(random_points)],
-                         history[:, :len(random_points)], times) if i else {})
-            row['preceding_to_current_relative_percent'] = preceding.get('relative_sampled_L2_percent')
-            rows.append(row)
-        _write_csv(output/f'{kind}_refinement_results.csv', rows)
-        np.savez_compressed(output/f'{kind}_sampled_histories.npz', points=points, times=times,
-                            labels=np.array([r['case'].label for r in runs]),
-                            temperature=np.stack(histories),
-                            initial_temperature_celsius=runs[0]['initial_temperature_celsius'])
-        # The reference's zero self-difference is intentionally not plotted.
-        fig, ax = plt.subplots(figsize=(6.4, 4.2))
-        ax.plot(np.arange(len(rows)-1), [r['relative_sampled_L2_percent'] for r in rows[:-1]], 'o-')
-        ax.set_xticks(np.arange(len(rows)-1), [r['label'] for r in rows[:-1]])
-        ax.set_ylabel('Sampled relative difference from finest (%)')
-        ax.set_xlabel('Refinement case (coarse to fine)')
-        ax.grid(alpha=0.25)
-        _finish_figure(fig, output/f'{kind}_refinement_difference.png')
-        display_ids = (np.arange(len(random_points), len(points))[:3]
-                       if len(probes) else np.arange(min(3, len(random_points))))
-        for point_id in display_ids:
-            fig, ax = plt.subplots(figsize=(6.4, 4.2))
-            for r, h in zip(runs, histories):
-                ax.plot(times, h[:, point_id], label=r['case'].label)
-            ax.set_xlabel('Time (s)')
-            ax.set_ylabel('Temperature (degrees C)')
-            ax.legend()
-            ax.grid(alpha=0.25)
-            _finish_figure(fig, output/f'{kind}_temperature_point_{point_id}.png')
-        report['groups'][kind] = {'reference': str(runs[-1]['folder']),
-                                  'display_point_ids': display_ids.tolist(), 'results': rows}
-    _write_json(output/'refinement_report.json', report)
-    print(f'Refinement study saved to: {output}')
-    return output
-
-
 def _truncation_physical_signature(manifest: dict[str, Any]) -> dict[str, Any]:
     # Working directories and STL locations can change without changing physics.
     signature = _nonlocalization_signature(manifest)
@@ -2478,9 +2107,7 @@ def main() -> None:
         if isinstance(configuration, TemporalTruncationStudyConfiguration):
             run_temporal_truncation_study(configuration)
             continue
-        if isinstance(configuration, RefinementStudyConfiguration):
-            run_refinement_study(configuration)
-        elif isinstance(configuration, LineCountStudyConfiguration):
+        if isinstance(configuration, LineCountStudyConfiguration):
             run_line_count_study(configuration)
         elif isinstance(configuration, LocalizationExtentStudyConfiguration):
             run_localization_extent_study(configuration)

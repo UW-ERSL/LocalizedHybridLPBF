@@ -170,14 +170,13 @@ Configure only selected studies; unused placeholders can remain. A `"both"` run 
 
 | Study key | Analysis |
 |---|---|
-| `fin_500_localization_extent` | Localization-scale sensitivity |
+| `fin_500_localization_extent` | Compare localization scales for the 500-line Fin setup |
 | `fin_500_detailed_case` | Detailed 500-line comparison |
 | `fin_500_temporal_truncation` | Temporal truncation versus hybrid formulations |
-| `fin_100_localized_refinement` | Mesh and time-step refinement |
-| `abaqus_one_line_convergence` | Abaqus reference convergence |
-| `abaqus_one_line_hybrid_comparison` | Hybrid versus Abaqus reference |
+| `abaqus_one_line_convergence` | Mesh and time-step convergence of the one-line Abaqus benchmark |
+| `abaqus_one_line_hybrid_comparison` | Compare conventional and localized hybrid with the one-line Abaqus reference |
 
-Optional additional analyses are `fin_line_count_scaling` and `fin_100_post_scan_temporal`. Compared runs must have compatible physical setups and numerical data. The current comparison tools normalize relative errors by physical Celsius reference temperatures; use the same normalization when comparing reported metrics.
+Optional additional analyses are `fin_line_count_scaling` (different scan-line counts) and `fin_100_post_scan_temporal` (post-scan cooling durations). Mesh and time-step convergence in the table refers to the one-line Abaqus benchmark. Compared runs must have compatible physical setups and numerical data. The current comparison tools normalize relative errors by physical Celsius reference temperatures; use the same normalization when comparing reported metrics.
 
 ### Abaqus reference data
 
