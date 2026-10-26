@@ -1,0 +1,28 @@
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual environments
+.venv/
+localized_hybrid_venv/
+
+# Generated simulation results
+results_*/
+
+# Abaqus output files
+*.odb
+*.sim
+*.lck
+*.log
+
+# Local comparison script and backup runner
+/compare_old_new_runs.py
+
+
+# Keep only Fin and Overhang STL files in Models
+/Models/*
+!/Models/Fin.STL
+!/Models/overhang.STL
+
+/support/
