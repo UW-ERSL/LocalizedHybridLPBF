@@ -7,11 +7,10 @@ Hybrid analytical–finite-element methods combine an analytical description of 
 The code supports the **localized hybrid**, **conventional hybrid**, and **uncompensated temporal-truncation** formulations, with Fin and Overhang geometries and tools for analyzing saved results. The paper assesses the method against an independent finite-element benchmark and multiline conventional-hybrid simulations. Its reported 500-line case achieves approximately **25.5× lower analytical evaluation time** and **3.92× lower total simulation time**, with a **0.139% relative nodal 2-norm difference** from the conventional solution. These are the paper’s case-specific results; runtime and accuracy depend on the chosen setup.
 
 **Paper:** *Localized Hybrid Analytical–Finite-Element Thermal Modeling for Laser Powder Bed Fusion*  
-**Preprint:** arXiv link forthcoming.
-<!-- Replace the line above with: **Preprint:** [Read on arXiv](ACTUAL_ARXIV_URL) -->
+**Preprint:** [arXiv:2610.33273](https://arxiv.org/abs/2610.33273) (October 2026)
 
 **Authors:** Mohammad Amin Mohammadi Golafshani — [mmohammadi4@wisc.edu](mailto:mmohammadi4@wisc.edu)  
-Krishnan Sureah — [ksuresh@wisc.edu](mailto:ksuresh@wisc.edu)  
+Krishnan Suresh — [ksuresh@wisc.edu](mailto:ksuresh@wisc.edu)  
 University of Wisconsin–Madison
 
 ## Getting started
@@ -203,7 +202,9 @@ Check matching geometry, material, laser, boundary conditions, and timing before
 
 ## Citation and contact
 
-If you use this code in research, please cite *Localized Hybrid Analytical–Finite-Element Thermal Modeling for Laser Powder Bed Fusion*. The arXiv link and complete citation will be added when available.
+If you use this code in research, please cite:
+
+> Mohammad Amin Mohammadi Golafshani and Krishnan Suresh (2026). *Localized Hybrid Analytical–Finite-Element Thermal Modeling for Laser Powder Bed Fusion*. arXiv:2610.33273. https://arxiv.org/abs/2610.33273
 
 For questions about the code, contact **Mohammad Amin Mohammadi Golafshani** at [mmohammadi4@wisc.edu](mailto:mmohammadi4@wisc.edu).
 
